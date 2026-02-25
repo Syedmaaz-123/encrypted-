@@ -119,7 +119,7 @@ def train_stego_networks(
         bit_loss = 0.0
         for _ in range(iterations):
             covers = torch.stack(
-                [image_generator.generate_cover((256, 256)) for _ in range(batch_size)]
+                [image_generator.generate_cover(size=(256, 256)) for _ in range(batch_size)]
             ).to(device)
             secret_bits = (
                 torch.randint(0, 2, (batch_size, secret_dim)).float().to(device)
