@@ -1,0 +1,9 @@
+venv/
+.DS_Store
+__pycache__/
+*.pyc
+.vscode/
+
+# Ignore large directories if they have big model files/dataset, you can comment this out if you need them.
+models/
+data/
