@@ -31,6 +31,53 @@ class DummyVideoDataset(Dataset):
         )
 
 
+import cv2
+import glob
+from torchvision import transforms
+from PIL import Image
+
+class RealVideoDataset(Dataset):
+    """Loads actual .mp4 or .avi videos from a directory for autoencoder training."""
+    def __init__(self, directory, frames=16, height=64, width=64):
+        self.video_paths = glob.glob(os.path.join(directory, "**", "*.avi"), recursive=True) + \
+                           glob.glob(os.path.join(directory, "**", "*.mp4"), recursive=True)
+        self.frames = frames
+        self.height = height
+        self.width = width
+        self.transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize((self.height, self.width)),
+            transforms.ToTensor()
+        ])
+
+    def __len__(self):
+        return len(self.video_paths)
+
+    def __getitem__(self, idx):
+        cap = cv2.VideoCapture(self.video_paths[idx])
+        frames = []
+        while len(frames) < self.frames:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_tensor = self.transform(frame) # shape (3, H, W)
+            frames.append(frame_tensor)
+        cap.release()
+        
+        # If video is too short, pad it with the last frame
+        while len(frames) < self.frames and len(frames) > 0:
+            frames.append(frames[-1])
+            
+        # If video couldn't be loaded at all, return zeros (edge case fallback)
+        if len(frames) == 0:
+            return torch.zeros((3, self.frames, self.height, self.width), dtype=torch.float32)
+            
+        # Stack into (C, F, H, W)
+        video_tensor = torch.stack(frames, dim=1)
+        return video_tensor
+
+
 def train_video_autoencoder(model, dataloader, epochs=5, device="cpu"):
     print("--- Training Video Autoencoder ---")
     model.to(device)
@@ -100,16 +147,47 @@ def train_stego_networks(
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    
+    # -------------------------------------------------------------
+    # 1. SETUP: CHOOSE DUMMY DATA OR REAL DATA
+    # -------------------------------------------------------------
+    # Change this to True when you have downloaded the datasets!
+    USE_REAL_DATA = False 
+    
+    # Define paths to your downloaded folders
+    VIDEO_DATASET_PATH = "../data/UCF101/" # Folder containing .mp4 or .avi
+    
+    if USE_REAL_DATA:
+        print("Loading REAL Video Dataset... (This might take a moment)")
+        # Load your real video dataset and create a dataloader
+        video_dataset = RealVideoDataset(directory=VIDEO_DATASET_PATH, frames=16)
+        video_loader = DataLoader(video_dataset, batch_size=4, shuffle=True)
+    else:
+        print("Loading DUMMY Video Dataset... (For quick testing)")
+        video_dataset = DummyVideoDataset(num_samples=20)
+        video_loader = DataLoader(video_dataset, batch_size=4)
+
+    # -------------------------------------------------------------
+    # 2. RUN AUTOENCODER TRAINING
+    # -------------------------------------------------------------
     ae = VideoAutoencoder(3, 256)
-    train_video_autoencoder(
-        ae, DataLoader(DummyVideoDataset(20), batch_size=4), 2, device
-    )
+    train_video_autoencoder(ae, video_loader, epochs=2, device=device)
+
+    # -------------------------------------------------------------
+    # 3. RUN STEGANOGRAPHY NETWORKS TRAINING
+    # -------------------------------------------------------------
+    # For Stego networks, Stable Diffusion `ImageGenerator(use_dummy=not USE_REAL_DATA)` 
+    # will handle real cover images if USE_REAL_DATA=True!
+    hider = HiderNetwork(3, 1, 32)
+    revealer = RevealerNetwork(3, 1, 32)
+    img_gen = ImageGenerator(device, use_dummy=not USE_REAL_DATA)
+    
     train_stego_networks(
-        HiderNetwork(3, 1, 32),
-        RevealerNetwork(3, 1, 32),
-        ImageGenerator(device, True),
-        2,
-        device,
-        8416,
+        hider,
+        revealer,
+        img_gen,
+        epochs=2,
+        device=device,
+        secret_dim=8416, 
     )
     print("Training Complete!")
